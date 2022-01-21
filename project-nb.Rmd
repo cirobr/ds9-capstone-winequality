@@ -20,7 +20,7 @@ https://www.kaggle.com/yasserh/wine-quality-dataset
 
 For ease of execution, all needed files can be downloaded from Github's author's page at:
 
-https://github.com/cirobr/ds9-capstone-winequality.git
+https://github.com/cirobr/ds9-capstone-winequality-edx.git
 <br>
 <br>
 <br>
