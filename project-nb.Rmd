@@ -1,0 +1,527 @@
+---
+title: "Wine quality prediction with Machine Learning"
+subtitle: "edX Capstone Final Project"
+author: "Ciro B Rosa"
+date: "21-Jan-2022"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+<br>
+<br>
+<br>
+
+### Introduction
+<br>
+
+This is the second project submitted by the author for the HarvardX Data Science course, under the Capstone module. It aims to predict quality of wine based on its chemical composition. The source dataset can be found on Kaggle, at the following link:
+
+https://www.kaggle.com/yasserh/wine-quality-dataset
+
+For ease of execution, all needed files can be downloaded from Github's author's page at:
+
+https://github.com/cirobr/ds9-capstone-winequality.git
+<br>
+<br>
+<br>
+
+### Project Contents
+<br>
+
+#### Dataset
+<br>
+
+The dataset "WineQT.csv" is stored on folder "/dat. It has 1142 observations and 13 (thirteen) columns: one outcome (quality), eleven predictors, and one column (Id), which is merely a sequential numbering for the observations. All columns are named at first row.
+<br>
+<br>
+
+#### Code
+<br>
+
+Three files are presented in this project:
+
+* File "project-code.R" contains the entire script for the project;
+* File "project-nb.Rmd" is its correspondent notebook file;
+* File "project-nb.pdf" is the notebook executed and stored in PDF format.
+<br>
+<br>
+<br>
+
+### Project Description
+<br>
+
+Code starts with environment setup, then the dataset is read and cleaned up. Dataset is randomly split in three parts: Training, Testing, and Validation. The Validation split will not be touched up to the point the final model is chosen.
+
+Next, a sequence of ML models are applied to classify the outcome "quality". Its efficiency is measured by the Accuracy calculated parameter and its correspondent Confusion Matrix. A table with all accuracies is generated at the end of each model, in order to compare efficiencies.
+
+At the end, the Validation split will be run, in order to confirm the forecasted accuracy and if there has been overtraning of the model.
+
+The project was developed and tested on a general purpose Linux Ubuntu 20.04 notebook, with both RStudio Version 1.4.1717 and R version 4.1.2 installed. It was also tested on a VM Linux Ubuntu 20.04 guest over a Windows 10 host. As such, code is expected to run smoothly on any machine with 8GB RAM.
+<br>
+<br>
+<br>
+
+### Project Execution
+<br>
+
+#### Environment setup
+<br>
+
+```{r warning=FALSE}
+# suppress warnings
+oldw <- getOption("warn")
+options(warn = -1)
+
+# install packages (if not already installed)
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(matrixStats)) install.packages("matrixStats", repos = "http://cran.us.r-project.org")
+if(!require(nnet)) install.packages("nnet", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(kknn)) install.packages("kknn", repos = "http://cran.us.r-project.org")
+
+# libraries
+library(ggplot2)
+library(tidyverse)
+library(caret)
+library(matrixStats)
+library(nnet)          # multinom model
+library(randomForest)  # rf model
+library(kknn)          # kknn model
+
+# global variables
+numberOfDigits <- 5
+options(digits = numberOfDigits)
+proportionTestSet <- 0.20
+control <- trainControl(method = "cv",   # 10-fold cross validation configuration
+                        number = 10, 
+                        p = .9, 
+                        allowParallel = TRUE)
+
+# global functions
+plot_optimization_chart <- function(model, chart_title){
+  m <- model %>% 
+    ggplot(highlight = TRUE) +
+    ggtitle(chart_title)
+  print(m)
+  model$bestTune
+  model$finalModel
+}
+
+```
+<br>
+
+Next, the main dataset is read:
+```{r warning=FALSE}
+# read dataset from csv
+# source of dataset: https://www.kaggle.com/yasserh/wine-quality-dataset
+wineDF <- read_csv(file = "./dat/WineQT.csv") %>% as_tibble()
+glimpse(wineDF)
+```
+<br>
+
+A basic cleanup is also done, as the original dataset is already provided in very good condition:
+```{r warning=FALSE}
+# remove column "Id" (not used) and make outcome "quality" as first column
+wineDF <- wineDF %>% select(-Id) %>% relocate(quality)
+
+# on column names, replace spaces by underline "_"
+names(wineDF) <- gsub(" ", "_", names(wineDF))
+names(wineDF)
+
+# check for NA's
+sum(is.na(wineDF))
+
+# display the cleaned dataset
+head(wineDF)
+```
+<br>
+
+Now, it is time to split the main dataset as follows: validationSet, testSet, and trainSet:
+```{r warning=FALSE}
+# split validation set for the final step (20%)
+set.seed(1, sample.kind="Rounding")
+testIndex <- createDataPartition(y = wineDF$quality, 
+                                 times = 1, 
+                                 p = proportionTestSet, 
+                                 list = FALSE)
+validationSet <- wineDF[testIndex,]
+
+# from the remaining dataset, split train and test sets (80 / 20%)
+mainSet <- wineDF[-testIndex,]
+
+set.seed(2, sample.kind="Rounding")
+testIndex <- createDataPartition(y = mainSet$quality, 
+                                 times = 1, 
+                                 p = proportionTestSet, 
+                                 list = FALSE)
+testSet  <- mainSet[testIndex,]
+trainSet <- mainSet[-testIndex,]
+```
+<br>
+<br>
+
+#### Data exploration
+<br>
+
+First of all, let's quickly check which wine quality rankings are present on the dataset:
+```{r warning=FALSE}
+# check for the different wine quality classes on the trainSet
+qualityClasses <- unique(trainSet$quality) %>% sort()
+qualityClasses
+```
+<br>
+
+Secondly, let's check a histogram for the distribution of wine quality. At the same time, we will check if, for each quality category, the data split respected the proportion for each of the classes at both trainSet and testSet:
+```{r warning=FALSE}
+# check for stratification of train / test split
+p1 <- trainSet %>%
+  group_by(quality) %>%
+  summarize(qty = n()) %>%
+  mutate(split = 'trainSet')
+
+p2 <- testSet %>%
+  group_by(quality) %>%
+  summarize(qty = n()) %>%
+  mutate(split = 'testSet')
+
+p <- bind_rows(p1, p2) %>% group_by(split)
+p %>% ggplot(aes(quality, qty, fill = split)) +
+  geom_bar(stat="identity", position = "dodge") +
+  ggtitle("Stratification of Testset / Trainset split") +
+  scale_x_continuous(breaks = qualityClasses)
+```
+On the above chart, it is seen that the amount of training data for categories 4-7 is much higher than for categories 3 and 8. This fact could lead to difficulties on the model forecast development, as the categories with little data may not be predicted with good accuracy.
+<br>
+<br>
+
+Next, we will take a look at the name of each chemical present at wine samples. We will also rank these chemicals for its variability within trainSet:
+```{r fig.height=7, fig.width=10, warning=FALSE, dpi=200}
+# variability analysis of predictors
+X <- trainSet %>% select(-quality) %>% as.matrix()
+sX <- colSds(X)
+sX <- bind_cols(colnames(X), sX) %>% as_tibble()
+colnames(sX) <- c("parameter", "stdev")
+
+sX %>% 
+  arrange(desc(stdev)) %>%    # First sort by val.
+  mutate(parameter=factor(parameter, levels=parameter)) %>%   # This trick update the factor levels
+  ggplot(aes(parameter, stdev)) +
+  geom_bar(stat= "identity") +
+  geom_text(aes(label=sprintf("%0.2f", stdev)), size=3, vjust=-0.8) +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1, size=10)) +
+  ggtitle("Ranking of predictors by variability")
+```
+<br>
+
+After checking the variability of all predictors, we will remove those that are considered as "low variability" by the "nearZeroVar" function.
+
+It is worth to mention that, despite the fact the above histogram shows predictors with (visually) low variability, they are all kept on the database after executing "nearZeroVar". That means the function execution considered that those predictors do have enough variability to stay in.
+```{r warning=FALSE}
+# remove predictors with small variance
+nzv <- trainSet %>%
+  select(-quality) %>%
+  nearZeroVar()
+removedPredictors <- colnames(trainSet[,nzv])
+removedPredictors
+
+trainSet <- trainSet %>% select(-all_of(removedPredictors))
+```
+<br>
+
+As a last step on the data preparation, memory is cleaned up and the outcome "quality" is changed to "factor", as all analysis to follow will be categorical (i.e. wine classification).
+```{r warning=FALSE}
+# clean for temporary data
+rm(mainSet, testIndex, wineDF, X, p, p1, p2, sX)
+rm(nzv, removedPredictors)
+
+# change outcome to factor
+trainSet$quality <- as_factor(trainSet$quality)
+testSet$quality  <- as_factor(testSet$quality)
+validationSet$quality <- as_factor(validationSet$quality)
+```
+<br>
+<br>
+
+#### Find the best model
+<br>
+
+In this analysis, all but the first model (naive) will be checked and optimized against the trainSet, then tested using 10-fold cross validation against the testSet. Its correspondent Confusion Matrix and Accuracy, besides the key parameters for the best fit model, are displayed accordingly.
+<br>
+<br>
+
+##### *The naive average model*
+<br>
+
+This model simply takes the average rounded to its nearest integer of the "quality" vector within the trainSet as unique quality prediction for all wines. Due to this approach, one can anticipate its performance will be extremely poor. Nevertheless, the author decided to include it merely for didactic purposes.
+```{r warning=FALSE}
+# training
+mu <- mean(as.numeric(trainSet$quality))
+mu <- round(mu)
+
+# predicting
+N <- length(testSet$quality)
+predicted <- replicate(N, mu) %>% factor(levels = qualityClasses)
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- tibble(model    = "naive",
+                          accuracy = acc)
+accuracyResults
+```
+
+As anticipated, the prediction just assumes all wines are category 4, which leads to a poor Confusion Matrix, where its main diagonal is not dominated by high values as a good model would give. Its accuracy of only 3.8% also reflects that.
+<br>
+<br>
+<br>
+
+##### *Penalized multinomial regression*
+<br>
+
+The model "multinom" has not been covered on course lectures. It is part of the "nnet" package and its documentation can be found at":
+https://cran.r-project.org/web/packages/nnet/nnet.pdf
+
+Its tuneGrid has only one possible parameter (weight decay), and as such it is programmed to be scanned by the tuneGrid.
+```{r warning=FALSE}
+# training
+set.seed(3, sample.kind="Rounding")
+mNomFit <- trainSet %>% train(quality ~ ., 
+                              method = "multinom", 
+                              data = .,
+                              trace = FALSE,   # suppress printing of iterations
+                              tuneGrid = data.frame(decay = seq(0.01, 0.5, 0.01)),
+                              trControl = control
+)
+plot_optimization_chart(mNomFit, "Optimization for multinom model")
+
+# predicting
+predicted <- testSet %>% predict(mNomFit, newdata = .)
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="multinom",
+                                                     accuracy = acc))
+accuracyResults
+```
+Compared to the naive model, we have obtained a significant improvement on accuracy, above 60%. Its confusion matrix also present a much better prediction of categories 5-6, besides marginal prediction for category 7, and nonexistent prediction at categories 3, 4 and 8. The result is in line to the observed fact that there is a small amount of data for those nonperforming classes.
+<br>
+<br>
+<br>
+
+##### *Random forest*
+<br>
+
+```{r warning=FALSE}
+# training
+set.seed(3, sample.kind="Rounding")
+rfFit <- trainSet %>% train(quality ~ .,
+                            method = "rf",
+                            data = .,
+                            tuneGrid = data.frame(mtry = seq(3, 7, 1)),
+                            trControl = control)
+plot_optimization_chart(rfFit, "Optimization for random forest")
+
+# predicting
+predicted <- testSet %>% predict(rfFit, newdata = ., type = "raw")
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="rf",
+                                                     accuracy = acc))
+accuracyResults
+```
+The Random Forest model presented further improvement on overall accuracy than the previous Multinom model, apparently thanks to better prediction of category 7. However, prediction of categories 3, 4 and 8 remain unsatisfactory.
+<br>
+<br>
+<br>
+
+##### *KNN*
+<br>
+
+This specific KNN (k-nearest-neighbors) model is part of the Caret package and it has been covered during course lectures. It has only one tuning parameter.
+
+At a later step, we will also run the KKNN (weighted-KNN), which has more tuning parameters than this model.
+```{r warning=FALSE}
+# training
+set.seed(3, sample.kind="Rounding")
+knnFit <- trainSet %>% train(quality ~ .,
+                             method = "knn",
+                             data = .,
+                             tuneGrid = data.frame(k = seq(3, 71, 2)),
+                             trControl = control
+)
+plot_optimization_chart(knnFit, "Optimization for knn")
+
+# predicting
+predicted <- testSet %>% predict(knnFit, newdata = ., type = "raw")
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="knn",
+                                                     accuracy = acc))
+accuracyResults
+```
+Accuracy for KNN is deteriorated, when compared to all past models but naive. This is reflected at the confusion matrix, which shows poor prediction at category 7.
+<br>
+<br>
+<br>
+
+##### *KKNN / search among all models available*
+<br>
+
+The KKNN (weighted-KNN) model has three tuning parameters, one of them is the "kernel", which brings the possibility of analyzing a given data point taking into account its surrounding points as well.
+
+For the tuning grid, the author decided to search the performance for all kernels. The best performing kernel will be taken for further tuning at the next step.
+
+Model documentation can be found at:
+https://cran.r-project.org/web/packages/kknn/kknn.pdf
+
+```{r warning=FALSE}
+# training
+set.seed(3, sample.kind="Rounding")
+kknnFit <- trainSet %>% train(quality ~ .,
+                              method = "kknn",
+                              data = .,
+                              tuneGrid = data.frame(kmax = seq(3, 41, 2),
+                                                    distance = c(1, 2),
+                                                    kernel = c("rectangular", 
+                                                               "triangular",
+                                                               "epanechnikov",
+                                                               "biweight",
+                                                               "tri-weight",
+                                                               "cos",
+                                                               "inv",
+                                                               "gaussian",
+                                                               "rank",
+                                                               "optimal"
+                                                    )),
+                              trControl = control)
+plot_optimization_chart(kknnFit, "Optimization for kknn / models search")
+
+# predicting
+predicted <- testSet %>% predict(kknnFit, newdata = ., type = "raw")
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="kknn/all models",
+                                                     accuracy = acc))
+accuracyResults
+
+```
+So far, the KKNN is the best one analyzed. The optimization chart clearly shows the "inv" kernel brings the best performance compared to all others. For this reason, it will be further tuned on the next step.
+<br>
+<br>
+<br>
+
+##### *KKNN / inv model*
+<br>
+
+The model "inv" is the winner from the search that was carried out above. As such, the tuning parameters for this run are expanded.
+
+```{r warning=FALSE}
+# training
+set.seed(3, sample.kind="Rounding")
+kknnInvFit <- trainSet %>% train(quality ~ .,
+                                 method = "kknn",
+                                 data = .,
+                                 tuneGrid = data.frame(kmax = seq(3, 81, 2),
+                                                       distance = seq(0.5, 2, 0.5),
+                                                       kernel = "inv"),
+                                 trControl = control)
+plot_optimization_chart(kknnInvFit, "Optimization for kknn / inv model")
+
+# predicting
+predicted <- testSet %>% predict(kknnInvFit, newdata = ., type = "raw")
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = testSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="kknn/inv",
+                                                     accuracy = acc))
+accuracyResults
+```
+We have obtained an accuracy in excess of 70% in the experiment. For this reason, the author chooses the kknn/inv model as the model for the final verification using the validationSet, at the next step.
+<br>
+<br>
+<br>
+
+##### *Best model validation*
+<br>
+
+```{r warning=FALSE}
+# predicting
+predicted <- validationSet %>% predict(kknnInvFit, newdata = ., type = "raw")
+
+# accuracy calculation
+cm <- confusionMatrix(data = predicted, reference = validationSet$quality)
+cm$table
+acc <- cm$overall["Accuracy"]
+
+accuracyResults <- bind_rows(accuracyResults, tibble(model ="kknn/inv/validation",
+                                                     accuracy = acc))
+accuracyResults
+
+
+
+# reset warnings
+options(warn = oldw)
+```
+The KKNN/Inv Kernel model is validated. The accuracy observed with the validation set has dropped to around 61%, from the previous 70+%. This result is expected for the fact that the validationSet was never seen by the model. As such, the performance of its prediction becomes lower than the one found when using the testSet (which has somehow been seen by the model).
+<br>
+<br>
+<br>
+
+### Conclusion
+<br>
+
+The dataset WineQT was cleaned and analyzed. A number of models were tested, and the best performing one, the KKNN/Inv Kernel, showed and accuracy in excess of 70% on testing and above 60% on validation. A good generalization of the model has been achieved, thanks mainly to the 10-fold cross-validation executed on the learning/training phase.
+
+On the other hand, lack of training data at categories 3, 4, 8 have led to a relatively poor performance on the accuracy of the model, despite the successful effort on improving the figures. The fact is confirmed by simple inspection of the confusion matrix.
+<br>
+<br>
+<br>
+
+### Next steps / Future work
+<br>
+
+Two possible ways are foreseen by the author, in order to improve the model accuracy:
+
+* To collect mode training data;
+* To investigate other algorithms such as SVM and CNN.
+<br>
+<br>
+
+The author is currently enrolled on a PhD program in Computer Science / AI / ML, with forecasted conclusion by 2024. He plans to research application of AI/ML on embedded microcontrollers, with and without GPU support. His plans include usage of the Julia language on his research, for the following reasons:
+
+* It is a compiled language;
+* Native parallel processing support;
+* Growing support for ARM microcontrollers;
+* Syntax similarity to Python.
+<br>
+<br>
+<br>
+
+### References
+<br>
+
+* Text book: http://amlbook.com/
+* NNET: https://cran.r-project.org/web/packages/nnet/nnet.pdf
+* KKNN: https://cran.r-project.org/web/packages/kknn/kknn.pdf
