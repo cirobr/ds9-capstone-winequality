@@ -1,0 +1,2 @@
+# ds9-capstone-winequality-edx 
+This is the second project submitted by the author for the HarvardX Data Science course, under the Capstone module. It aims to predict quality of wine based on its chemical composition.
