@@ -1,0 +1,22 @@
+# R
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Python
+.ipynb_checkpoints/
+
+#C
+/build*
+CMakeLists.txt.user
+CMakeLists.txt.*
+*.o
+*.exe
+
+# others
+#*.log
+#*.tex
+#*.html
+
+
